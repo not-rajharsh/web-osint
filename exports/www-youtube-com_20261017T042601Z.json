@@ -1,0 +1,128 @@
+{
+  "tool": "OSINT Scraper",
+  "version": "1.0.0",
+  "scraped_at": "2026-10-17T04:26:01+00:00",
+  "fetch": {
+    "requested_url": "https://youtube.com",
+    "final_url": "https://www.youtube.com/",
+    "status_code": 200,
+    "reason": "OK",
+    "elapsed_ms": 1554,
+    "content_type": "text/html",
+    "encoding": "utf-8",
+    "size_bytes": 958071,
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+    "attempts": 1,
+    "redirected": true
+  },
+  "page": {
+    "metadata": {
+      "title": "YouTube",
+      "description": "Enjoy the videos and music you love, upload original content, and share it all with friends, family, and the world on YouTube.",
+      "keywords": [
+        "video",
+        "sharing",
+        "camera phone",
+        "video phone",
+        "free",
+        "upload"
+      ],
+      "author": null,
+      "language": "en",
+      "charset": null,
+      "canonical": "https://www.youtube.com/",
+      "robots": null,
+      "generator": null,
+      "favicon": "https://www.youtube.com/s/desktop/5d669aa8/img/favicon.ico",
+      "open_graph": {
+        "image": "https://www.youtube.com/img/desktop/yt_1200.png",
+        "title": "YouTube"
+      },
+      "twitter": {}
+    },
+    "headings": [],
+    "links": [
+      {
+        "text": "YouTube",
+        "url": "https://www.youtube.com/",
+        "type": "internal",
+        "rel": null
+      },
+      {
+        "text": "About",
+        "url": "https://www.youtube.com/about/",
+        "type": "internal",
+        "rel": null
+      },
+      {
+        "text": "Press",
+        "url": "https://www.youtube.com/about/press/",
+        "type": "internal",
+        "rel": null
+      },
+      {
+        "text": "Copyright",
+        "url": "https://www.youtube.com/about/copyright/",
+        "type": "internal",
+        "rel": null
+      },
+      {
+        "text": "Contact us",
+        "url": "https://www.youtube.com/t/contact_us/",
+        "type": "internal",
+        "rel": null
+      },
+      {
+        "text": "Creators",
+        "url": "https://www.youtube.com/creators/",
+        "type": "internal",
+        "rel": null
+      },
+      {
+        "text": "Advertise",
+        "url": "https://www.youtube.com/ads/",
+        "type": "internal",
+        "rel": null
+      },
+      {
+        "text": "Developers",
+        "url": "https://developers.google.com/youtube",
+        "type": "external",
+        "rel": null
+      },
+      {
+        "text": "Terms",
+        "url": "https://www.youtube.com/t/terms",
+        "type": "internal",
+        "rel": null
+      },
+      {
+        "text": "Privacy",
+        "url": "https://www.youtube.com/t/privacy",
+        "type": "internal",
+        "rel": null
+      },
+      {
+        "text": "Policy & Safety",
+        "url": "https://www.youtube.com/about/policies/",
+        "type": "internal",
+        "rel": null
+      },
+      {
+        "text": "How YouTube works",
+        "url": "https://www.youtube.com/howyoutubeworks?utm_campaign=ytgen&utm_source=ythp&utm_medium=LeftNav&utm_content=txt&u=https%3A%2F%2Fwww.youtube.com%2Fhowyoutubeworks%3Futm_source%3Dythp%26utm_medium%3DLeftNav%26utm_campaign%3Dytgen",
+        "type": "internal",
+        "rel": null
+      },
+      {
+        "text": "Test new features",
+        "url": "https://www.youtube.com/new",
+        "type": "internal",
+        "rel": null
+      }
+    ],
+    "images": [],
+    "text": "About\nPress\nCopyright\nContact us\nCreators\nAdvertise\nDevelopers\nTerms\nPrivacy\nPolicy & Safety\nHow YouTube works\nTest new features\n© 2026 Google LLC",
+    "word_count": 23
+  }
+}
