@@ -15,7 +15,8 @@ Open Graph, Twitter cards, favicon), **headings** (H1-H6 hierarchy), **links**
 
 ```bash
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install .                                       # runtime only
+pip install -e ".[dev]"                             # development (tests, ruff, mypy)
 ```
 
 Requires Python 3.10+.
@@ -23,10 +24,12 @@ Requires Python 3.10+.
 ## Usage
 
 ```bash
-python scraper.py --url https://example.com
-python scraper.py --url https://example.com --format json
-python scraper.py -u example.org -f md --respect-robots --limit 25
-python scraper.py -u https://example.com -q        # prints only the file paths
+osint-scraper --url https://example.com
+osint-scraper --url https://example.com --format json
+osint-scraper -u example.org -f md --respect-robots --limit 25
+osint-scraper -u https://example.com -q        # prints only the file paths
+
+python scraper.py --url https://example.com    # works from a checkout too
 ```
 
 | Option | Default | Description |
