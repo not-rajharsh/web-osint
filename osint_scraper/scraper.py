@@ -28,7 +28,7 @@ from .config import (
     __version__,
 )
 from .exporter import FORMATS, ExportError, export_report
-from .fetcher import FetchError, Fetcher
+from .fetcher import Fetcher, FetchError
 from .models import ScrapeReport
 from .parser import ParseError, parse_page
 from .tui import UI

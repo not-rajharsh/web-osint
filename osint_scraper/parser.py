@@ -47,8 +47,12 @@ def parse_page(html: str, base_url: str) -> PageData:
 
 
 # ------------------------------------------------------------------ utilities
-def _clean(value: str | None) -> str:
-    return " ".join((value or "").split())
+def _clean(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        value = " ".join(str(item) for item in value)
+    return " ".join(str(value).split())
 
 
 def _rel_values(tag: Tag) -> set[str]:
@@ -99,8 +103,8 @@ def _extract_metadata(soup: BeautifulSoup, base_url: str) -> dict[str, Any]:
         "description": meta_map.get("description"),
         "keywords": keywords,
         "author": meta_map.get("author"),
-        "language": _clean(html_tag.get("lang")) if html_tag else None,
-        "charset": _clean(charset_tag.get("charset")) if charset_tag else None,
+        "language": _clean(html_tag.get("lang")) if isinstance(html_tag, Tag) else None,
+        "charset": _clean(charset_tag.get("charset")) if isinstance(charset_tag, Tag) else None,
         "canonical": canonical,
         "robots": meta_map.get("robots"),
         "generator": meta_map.get("generator"),

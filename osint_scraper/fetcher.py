@@ -11,11 +11,11 @@ import random
 import re
 import time
 from typing import Callable
-from urllib.robotparser import RobotFileParser
 from urllib.parse import urlsplit
+from urllib.robotparser import RobotFileParser
 
 import requests
-from bs4 import UnicodeDammit
+from bs4.dammit import UnicodeDammit
 
 from .config import (
     BASE_HEADERS,
