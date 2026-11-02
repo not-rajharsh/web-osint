@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
 
+from .config import FINDING_CATEGORIES
+
 
 @dataclass(frozen=True)
 class FetchResult:
@@ -26,17 +28,49 @@ class FetchResult:
     user_agent: str
     attempts: int
     html: str = field(repr=False)
+    headers: dict[str, str] = field(default_factory=dict, repr=False)
 
     @property
     def redirected(self) -> bool:
         return self.requested_url != self.final_url
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialisable view; the (large) HTML body is intentionally excluded."""
+        """Serialisable view; the HTML body and raw headers are excluded."""
         data = asdict(self)
         data.pop("html")
+        data.pop("headers")
         data["redirected"] = self.redirected
         return data
+
+
+@dataclass(frozen=True)
+class Finding:
+    """One piece of extracted evidence with provenance and confidence."""
+
+    category: str
+    value: str
+    confidence: float
+    source: str
+    data: dict[str, Any] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "value": self.value,
+            "confidence": round(self.confidence, 2),
+            "source": self.source,
+        }
+        if self.data:
+            result["data"] = self.data
+        return result
+
+
+@dataclass(frozen=True)
+class ScriptSource:
+    """Inline or fetched JavaScript content used by extraction."""
+
+    label: str
+    content: str
+    url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -83,12 +117,29 @@ class ScrapeReport:
     scraped_at: datetime
     fetch: FetchResult
     page: PageData
+    findings: tuple[Finding, ...] = ()
+
+    def grouped_findings(self) -> dict[str, list[Finding]]:
+        grouped: dict[str, list[Finding]] = {}
+        for finding in self.findings:
+            grouped.setdefault(finding.category, []).append(finding)
+        return grouped
 
     def to_dict(self) -> dict[str, Any]:
+        grouped = self.grouped_findings()
+        ordered = {
+            category: [finding.to_dict() for finding in grouped[category]]
+            for category in FINDING_CATEGORIES
+            if category in grouped
+        }
+        for category, findings in grouped.items():
+            if category not in ordered:
+                ordered[category] = [finding.to_dict() for finding in findings]
         return {
             "tool": self.tool,
             "version": self.version,
             "scraped_at": self.scraped_at.isoformat(timespec="seconds"),
             "fetch": self.fetch.to_dict(),
             "page": self.page.to_dict(),
+            "findings": ordered,
         }

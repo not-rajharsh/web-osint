@@ -57,6 +57,8 @@ def test_fetch_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.attempts == 1
     assert result.user_agent == "TestUA"
     assert "<body>ok</body>" in result.html
+    assert result.headers["Content-Type"] == "text/html; charset=utf-8"
+    assert "headers" not in result.to_dict()
 
 
 def test_fetch_retries_transient_http(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -178,3 +180,27 @@ def test_robots_forbidden_response_disallows(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(fetcher.session, "get", lambda *args, **kwargs: response)
 
     assert fetcher.is_allowed("https://example.com/page") is False
+
+
+def test_fetch_text_accepts_javascript_and_uses_per_call_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetcher = make_fetcher(max_bytes=1000)
+    response = FakeResponse(
+        body=b"console.log('ok');",
+        headers={"Content-Type": "application/javascript", "Content-Length": "18"},
+    )
+    monkeypatch.setattr(fetcher.session, "get", lambda *args, **kwargs: response)
+
+    assert fetcher.fetch_text("https://example.com/app.js", max_bytes=100) == "console.log('ok');"
+    assert fetcher.fetch_text("https://example.com/app.js") == "console.log('ok');"
+
+
+def test_fetch_text_rejects_html(monkeypatch: pytest.MonkeyPatch) -> None:
+    fetcher = make_fetcher()
+    monkeypatch.setattr(fetcher.session, "get", lambda *args, **kwargs: FakeResponse())
+
+    with pytest.raises(FetchError) as excinfo:
+        fetcher.fetch_text("https://example.com/page")
+
+    assert excinfo.value.kind == "content_type"

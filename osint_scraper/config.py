@@ -26,7 +26,41 @@ DEFAULT_OUTPUT_DIR = "exports"
 DEFAULT_TABLE_ROWS = 15           # rows shown per table in the terminal
 MD_MAX_LINKS = 100                # rows kept in the Markdown summary
 MD_MAX_IMAGES = 50
+MD_MAX_FINDINGS_PER_CATEGORY = 50
 MD_TEXT_EXCERPT_CHARS = 2000
+
+# --- Extraction defaults ----------------------------------------------------
+DEFAULT_SCRIPT_LIMIT = 10         # linked scripts fetched per run
+MAX_SCRIPT_BYTES = 2 * 1024 * 1024
+SCRIPT_DELAY = 0.5                # seconds between linked-script requests
+SCRIPT_CONTENT_TYPES = frozenset(
+    {
+        "application/javascript",
+        "application/x-javascript",
+        "text/javascript",
+        "text/plain",
+        "application/json",
+    }
+)
+
+FINDING_CATEGORIES = (
+    "emails",
+    "phones",
+    "social",
+    "crypto",
+    "secrets",
+    "structured_data",
+    "technologies",
+)
+FINDING_LABELS = {
+    "emails": "Emails",
+    "phones": "Phone numbers",
+    "social": "Social profiles",
+    "crypto": "Crypto addresses",
+    "secrets": "Exposed secrets",
+    "structured_data": "Structured data",
+    "technologies": "Technologies",
+}
 
 # --- User-agent rotation ----------------------------------------------------
 USER_AGENTS: tuple[str, ...] = (

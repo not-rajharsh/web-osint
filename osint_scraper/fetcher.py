@@ -27,6 +27,7 @@ from .config import (
     MAX_REDIRECTS,
     MAX_RETRY_AFTER,
     RETRYABLE_STATUS,
+    SCRIPT_CONTENT_TYPES,
     USER_AGENTS,
 )
 from .models import FetchResult
@@ -81,11 +82,37 @@ class Fetcher:
 
     # ------------------------------------------------------------------ public
     def fetch(self, url: str) -> FetchResult:
-        """Fetch ``url``, retrying transient failures with exponential backoff."""
+        """Fetch an HTML page, retrying transient failures with exponential backoff."""
+        return self._fetch(url, HTML_CONTENT_TYPES, is_html=True, max_bytes=self.max_bytes)
+
+    def fetch_text(self, url: str, *, max_bytes: int | None = None) -> str:
+        """Fetch a JavaScript/text resource and return its decoded body."""
+        result = self._fetch(
+            url,
+            SCRIPT_CONTENT_TYPES,
+            is_html=False,
+            max_bytes=max_bytes or self.max_bytes,
+        )
+        return result.html
+
+    def _fetch(
+        self,
+        url: str,
+        content_types: frozenset[str],
+        *,
+        is_html: bool,
+        max_bytes: int,
+    ) -> FetchResult:
         total_attempts = self.retries + 1
         for attempt in range(1, total_attempts + 1):
             try:
-                return self._attempt(url, attempt)
+                return self._attempt(
+                    url,
+                    attempt,
+                    content_types=content_types,
+                    is_html=is_html,
+                    max_bytes=max_bytes,
+                )
             except FetchError as exc:
                 if not exc.retryable or attempt >= total_attempts:
                     raise
@@ -132,7 +159,15 @@ class Fetcher:
     def _headers(self, user_agent: str | None = None) -> dict[str, str]:
         return {**BASE_HEADERS, "User-Agent": user_agent or self._pick_user_agent()}
 
-    def _attempt(self, url: str, attempt: int) -> FetchResult:
+    def _attempt(
+        self,
+        url: str,
+        attempt: int,
+        *,
+        content_types: frozenset[str],
+        is_html: bool,
+        max_bytes: int,
+    ) -> FetchResult:
         user_agent = self._pick_user_agent()
         started = time.perf_counter()
         try:
@@ -171,21 +206,23 @@ class Fetcher:
             content_type = (
                 response.headers.get("Content-Type", "").split(";")[0].strip().lower()
             )
-            if content_type and content_type not in HTML_CONTENT_TYPES:
+            if content_type and content_type not in content_types:
+                expected = "HTML" if is_html else "JavaScript or text"
                 raise FetchError(
-                    f"Unsupported content type '{content_type}' (expected HTML)",
+                    f"Unsupported content type '{content_type}' (expected {expected})",
                     kind="content_type",
                 )
-            body = self._read_body(response)
+            body = self._read_body(response, max_bytes)
             final_url = response.url
             status_code = response.status_code
             reason = response.reason or ""
             raw_content_type = response.headers.get("Content-Type", "")
+            response_headers = dict(response.headers)
 
         if not body.strip():
             raise FetchError("The server returned an empty response body", kind="empty")
 
-        html, encoding = _decode(body, raw_content_type)
+        html, encoding = _decode(body, raw_content_type, is_html=is_html)
         return FetchResult(
             requested_url=url,
             final_url=final_url,
@@ -198,6 +235,7 @@ class Fetcher:
             user_agent=user_agent,
             attempts=attempt,
             html=html,
+            headers=response_headers,
         )
 
     def _check_status(self, response: requests.Response) -> None:
@@ -216,11 +254,11 @@ class Fetcher:
             retry_after=retry_after,
         )
 
-    def _read_body(self, response: requests.Response) -> bytes:
+    def _read_body(self, response: requests.Response, max_bytes: int) -> bytes:
         declared = response.headers.get("Content-Length", "").strip()
-        if declared.isdigit() and int(declared) > self.max_bytes:
+        if declared.isdigit() and int(declared) > max_bytes:
             raise FetchError(
-                f"Response is {int(declared):,} bytes; limit is {self.max_bytes:,}",
+                f"Response is {int(declared):,} bytes; limit is {max_bytes:,}",
                 kind="too_large",
             )
         chunks: list[bytes] = []
@@ -230,9 +268,9 @@ class Fetcher:
                 if not chunk:
                     continue
                 total += len(chunk)
-                if total > self.max_bytes:
+                if total > max_bytes:
                     raise FetchError(
-                        f"Response exceeded the {self.max_bytes:,} byte limit",
+                        f"Response exceeded the {max_bytes:,} byte limit",
                         kind="too_large",
                     )
                 chunks.append(chunk)
@@ -278,11 +316,11 @@ def _describe_connection_error(exc: BaseException) -> tuple[str, str]:
     return "connection", f"Connection failed: {_short(exc)}"
 
 
-def _decode(body: bytes, content_type_header: str) -> tuple[str, str]:
+def _decode(body: bytes, content_type_header: str, *, is_html: bool = True) -> tuple[str, str]:
     """Decode bytes to text honouring header charset, <meta> charset, then sniffing."""
     match = _CHARSET_RE.search(content_type_header)
     hints = [match.group(1)] if match else []
-    dammit = UnicodeDammit(body, known_definite_encodings=hints, is_html=True)
+    dammit = UnicodeDammit(body, known_definite_encodings=hints, is_html=is_html)
     if dammit.unicode_markup is None:
         return body.decode("utf-8", errors="replace"), "utf-8 (lossy)"
     return dammit.unicode_markup, dammit.original_encoding or "unicode"
