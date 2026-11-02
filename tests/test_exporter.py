@@ -6,12 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from osint_scraper.config import MD_MAX_LINKS
+from osint_scraper.config import MD_MAX_FINDINGS_PER_CATEGORY, MD_MAX_LINKS
 from osint_scraper.exporter import ExportError, export_report, render_json, render_markdown
-from osint_scraper.models import FetchResult, PageData, ScrapeReport
+from osint_scraper.models import FetchResult, Finding, PageData, ScrapeReport
 
 
-def make_report(links: list[dict[str, str | None]] | None = None) -> ScrapeReport:
+def make_report(
+    links: list[dict[str, str | None]] | None = None,
+    findings: tuple[Finding, ...] = (),
+) -> ScrapeReport:
     if links is None:
         links = [
             {"text": "Home", "url": "https://example.com/", "type": "internal", "rel": None},
@@ -48,6 +51,7 @@ def make_report(links: list[dict[str, str | None]] | None = None) -> ScrapeRepor
         scraped_at=datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
         fetch=fetch,
         page=page,
+        findings=findings,
     )
 
 
@@ -97,3 +101,62 @@ def test_export_report_never_overwrites(tmp_path: Path) -> None:
 def test_export_report_rejects_unknown_format(tmp_path: Path) -> None:
     with pytest.raises(ExportError):
         export_report(make_report(), "xml", tmp_path)
+
+
+def make_finding(
+    category: str,
+    value: str,
+    *,
+    confidence: float = 0.9,
+    source: str = "html:line 1",
+) -> Finding:
+    return Finding(category=category, value=value, confidence=confidence, source=source)
+
+
+def test_render_json_groups_findings_in_configured_order() -> None:
+    report = make_report(
+        findings=(
+            make_finding("technologies", "Nginx"),
+            make_finding("emails", "alice@example.com", confidence=0.956),
+            make_finding("secrets", "AKIA…CDEF", source="inline-script[0]:line 2"),
+        )
+    )
+
+    data = json.loads(render_json(report))
+
+    assert list(data["findings"]) == ["emails", "secrets", "technologies"]
+    assert data["findings"]["emails"][0] == {
+        "value": "alice@example.com",
+        "confidence": 0.96,
+        "source": "html:line 1",
+    }
+    assert data["findings"]["secrets"][0]["source"] == "inline-script[0]:line 2"
+
+
+def test_render_markdown_includes_findings_section() -> None:
+    report = make_report(
+        findings=(
+            make_finding("emails", "alice@example.com"),
+            make_finding("technologies", "Nginx 1.25.3", confidence=0.95),
+        )
+    )
+
+    markdown = render_markdown(report)
+
+    assert "| Findings | 2 |" in markdown
+    assert "## Entities & Findings (2)" in markdown
+    assert "### Emails (1)" in markdown
+    assert "**alice@example.com** (confidence 90%)" in markdown
+    assert "### Technologies (1)" in markdown
+    assert "**Nginx 1.25.3** (confidence 95%)" in markdown
+
+
+def test_markdown_truncates_findings_per_category() -> None:
+    findings = tuple(
+        make_finding("emails", f"user{index}@example.com")
+        for index in range(MD_MAX_FINDINGS_PER_CATEGORY + 1)
+    )
+
+    markdown = render_markdown(make_report(findings=findings))
+
+    assert "...1 more not shown" in markdown

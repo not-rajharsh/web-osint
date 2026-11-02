@@ -28,9 +28,11 @@ from .config import (
     __version__,
 )
 from .exporter import FORMATS, ExportError, export_report
+from .extractors import ExtractionContext, run_extractors
 from .fetcher import Fetcher, FetchError
 from .models import ScrapeReport
 from .parser import ParseError, parse_page
+from .scripts import collect_scripts
 from .tui import UI
 
 EXIT_OK = 0
@@ -113,6 +115,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="refuse to fetch pages disallowed by the site's robots.txt",
     )
     parser.add_argument(
+        "--scan-scripts", action="store_true",
+        help="fetch same-site linked JavaScript to scan for exposed secrets "
+        "(robots.txt is always honoured for these requests)",
+    )
+    parser.add_argument(
         "-l", "--limit", type=_positive_int, default=DEFAULT_TABLE_ROWS, metavar="N",
         help="rows shown per terminal table (default: %(default)s)",
     )
@@ -165,12 +172,34 @@ def run(args: argparse.Namespace, ui: UI) -> int:
 
             spinner.update("Parsing HTML")
             page = parse_page(fetch.html, fetch.final_url)
+
+            spinner.update("Collecting scripts")
+            scripts = collect_scripts(
+                fetch.html,
+                fetch.final_url,
+                fetcher=fetcher,
+                scan_linked=args.scan_scripts,
+                respect_robots=True,
+                on_event=spinner.update,
+            )
+
+            spinner.update("Extracting entities")
+            context = ExtractionContext(
+                html=fetch.html,
+                base_url=fetch.final_url,
+                headers=fetch.headers,
+                page=page,
+                scripts=tuple(scripts),
+            )
+            findings = run_extractors(context)
+
             report = ScrapeReport(
                 tool=APP_NAME,
                 version=__version__,
                 scraped_at=datetime.now(timezone.utc),
                 fetch=fetch,
                 page=page,
+                findings=findings,
             )
 
             spinner.update("Writing exports")

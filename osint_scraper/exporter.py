@@ -7,7 +7,14 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .config import MD_MAX_IMAGES, MD_MAX_LINKS, MD_TEXT_EXCERPT_CHARS
+from .config import (
+    FINDING_CATEGORIES,
+    FINDING_LABELS,
+    MD_MAX_FINDINGS_PER_CATEGORY,
+    MD_MAX_IMAGES,
+    MD_MAX_LINKS,
+    MD_TEXT_EXCERPT_CHARS,
+)
 from .models import ScrapeReport
 
 FORMATS = ("json", "md", "both")
@@ -81,6 +88,7 @@ def render_markdown(report: ScrapeReport) -> str:
         f"({counts.get('internal', 0)} internal, {counts.get('external', 0)} external, "
         f"{counts.get('mailto', 0) + counts.get('tel', 0)} contact) |",
         f"| Images | {len(page.images)} |",
+        f"| Findings | {len(report.findings)} |",
         "",
     ]
 
@@ -92,6 +100,33 @@ def render_markdown(report: ScrapeReport) -> str:
     else:
         lines.append("_No metadata found._")
     lines.append("")
+
+    lines += [f"## Entities & Findings ({len(report.findings)})", ""]
+    if report.findings:
+        grouped = report.grouped_findings()
+        categories = list(FINDING_CATEGORIES) + [
+            category for category in grouped if category not in FINDING_CATEGORIES
+        ]
+        for category in categories:
+            findings = grouped.get(category, [])
+            if not findings:
+                continue
+            label = FINDING_LABELS.get(category, category.replace("_", " ").title())
+            lines += [f"### {label} ({len(findings)})", ""]
+            for finding in findings[:MD_MAX_FINDINGS_PER_CATEGORY]:
+                lines.append(
+                    f"- **{_md_inline(finding.value)}** "
+                    f"(confidence {finding.confidence:.0%}) - "
+                    f"source: {_md_inline(finding.source)}"
+                )
+            if len(findings) > MD_MAX_FINDINGS_PER_CATEGORY:
+                lines.append(
+                    f"- _...{len(findings) - MD_MAX_FINDINGS_PER_CATEGORY} more not shown "
+                    f"(see the JSON export)._"
+                )
+            lines.append("")
+    else:
+        lines += ["_No entities or technologies detected._", ""]
 
     lines += [f"## Headings ({len(page.headings)})", ""]
     if page.headings:

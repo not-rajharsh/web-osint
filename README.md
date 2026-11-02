@@ -8,8 +8,17 @@ Open Graph, Twitter cards, favicon), **headings** (H1-H6 hierarchy), **links**
 (deduplicated, classified internal / external / mailto / tel), **images**
 (including lazy-loaded and `srcset`), and **visible text**.
 
+It also extracts **entities and findings** with confidence and line-level
+provenance: email addresses (including common obfuscation), international phone
+numbers, social profiles, Bitcoin/Ethereum addresses, exposed secrets from
+inline JavaScript (and optionally linked scripts), JSON-LD/microdata, and
+technology fingerprints. See [Entity extraction](#entity-extraction).
+
 > Only scrape sites you are permitted to access and respect their terms of use.
 > Use `--respect-robots` to honour robots.txt.
+>
+> Detection is best-effort, not proof. Review findings before acting on them.
+> Secret values are always masked in exports and terminal output.
 
 ## Install
 
@@ -28,6 +37,7 @@ osint-scraper --url https://example.com
 osint-scraper --url https://example.com --format json
 osint-scraper -u example.org -f md --respect-robots --limit 25
 osint-scraper -u https://example.com -q        # prints only the file paths
+osint-scraper -u https://example.com --scan-scripts  # also scan same-site JS
 
 python scraper.py --url https://example.com    # works from a checkout too
 ```
@@ -41,11 +51,13 @@ python scraper.py --url https://example.com    # works from a checkout too
 | `-r, --retries` | `2` | Retries for timeouts, connection drops, and HTTP 429/5xx. |
 | `-a, --user-agent` | rotate | Use a fixed User-Agent instead of the built-in pool. |
 | `--respect-robots` | off | Refuse pages disallowed by robots.txt. |
+| `--scan-scripts` | off | Fetch same-site linked JavaScript for secret scanning (robots.txt is always checked for these requests). |
 | `-l, --limit` | `15` | Rows per terminal table (exports always contain everything\*). |
 | `--no-color` | off | Disable colour (`NO_COLOR` is also honoured). |
 | `-q, --quiet` | off | No spinner or tables; print only exported paths. |
 
-\*The Markdown summary caps links at 100 and images at 50 and says so; JSON is complete.
+\*The Markdown summary caps links at 100, images at 50, and each finding category
+at 50 and says so; JSON is complete.
 
 ### Exit codes
 
@@ -73,9 +85,42 @@ Existing files are never overwritten (`-1`, `-2`, ... suffix is added).
              "headings": [{ "level": 1, "text": "..." }],
              "links":    [{ "text": "...", "url": "...", "type": "internal", "rel": null }],
              "images":   [{ "url": "...", "alt": "...", "width": null, "height": null }],
-             "text": "...", "word_count": 22 }
+             "text": "...", "word_count": 22 },
+  "findings": {
+    "emails": [{ "value": "alice@example.com", "confidence": 0.95, "source": "html:line 12" }],
+    "secrets": [{ "value": "AKIA…CDEF", "confidence": 0.95,
+                  "source": "https://example.com/app.js:line 3",
+                  "data": { "pattern": "aws_access_key" } }]
+  }
 }
 ```
+
+Findings are grouped in a fixed category order (`emails`, `phones`, `social`,
+`crypto`, `secrets`, `structured_data`, `technologies`). Each finding includes a
+0–1 confidence and a source such as `html:line 12`, `text:line 3`, or a script
+URL plus line number.
+
+## Entity extraction
+
+| Category | What is detected | Notes |
+|---|---|---|
+| Emails | Addresses in HTML and JavaScript | Handles `[at]` / `[dot]` and HTML-entity obfuscation; requires a valid public suffix. |
+| Phones | Numbers in page text and `tel:` links | Validated with libphonenumber and normalised to E.164. |
+| Social | Profile URLs and handles | GitHub, Twitter/X, LinkedIn, Facebook, Instagram, YouTube, TikTok, Reddit, Telegram, Mastodon, Pinterest. |
+| Crypto | Bitcoin and Ethereum addresses | Bitcoin Base58Check and Bech32 checksums are verified. |
+| Secrets | Known token/key formats | AWS, GitHub, GitLab, Slack, Stripe, Google API keys, JWTs, and private-key headers. Values are masked (`AKIA…CDEF`). |
+| Structured data | JSON-LD and schema.org microdata | Malformed JSON-LD is ignored. |
+| Technologies | Server, framework, CMS, and library hints | Uses response headers, `generator` metadata, assets, and framework markers. |
+
+Inline scripts are always scanned. Linked scripts are fetched only with
+`--scan-scripts`, only from the same registrable domain, and with robots.txt
+always enforced. To stay polite, script scanning is capped at 10 requests,
+2 MiB per script, and 0.5 s between requests.
+
+To add a category, create a module in `osint_scraper/extractors/` with a
+subclass of `Extractor`, decorate it with `@register`, and add its name and
+label to `FINDING_CATEGORIES` / `FINDING_LABELS` in `config.py`. Modules are
+discovered automatically.
 
 ## Project layout
 
@@ -86,6 +131,12 @@ osint_scraper/
   models.py                dataclasses shared between layers
   fetcher.py               Requests session, retries, UA rotation, robots.txt
   parser.py                BeautifulSoup extraction (pure function)
+  scripts.py               Inline and linked JavaScript collection
+  extractors/              Auto-discovered extraction plugins
+    base.py                Extractor interface, context, registry
+    runner.py              Plugin discovery and execution
+    emails.py phones.py social.py crypto.py secrets.py
+    structured_data.py technologies.py
   exporter.py              JSON and Markdown writers
   tui.py                   Rich design tokens and components
 scraper.py                 backwards-compatible wrapper for the CLI
@@ -125,7 +176,7 @@ Design rationale: [docs/ADR-001-modular-pipeline.md](docs/ADR-001-modular-pipeli
 | Status spinner | message updates per stage (robots, fetch, retry, parse, write); no-op in `--quiet` | Retry messages show attempt count and wait |
 | Notice | ok / warn / error / info | Errors go to stderr |
 | Error panel | title, message, optional hint | One hint per failure kind |
-| Summary / Metadata / Links / Images tables | populated; truncated (footer says "Showing N of M"); empty (warn notice) | Long cells ellipsize or fold |
+| Summary / Metadata / Entities & Findings / Links / Images tables | populated; truncated (footer says "Showing N of M"); empty (warn notice) | Findings show type, value, confidence, and source; long cells ellipsize or fold |
 | Heading tree | nested by level | Respects `--limit` |
 | Saved panel | one line per file | `--quiet` prints bare paths for piping |
 
@@ -140,5 +191,5 @@ Design rationale: [docs/ADR-001-modular-pipeline.md](docs/ADR-001-modular-pipeli
 ## Extending
 
 - **New export format:** add a `render_*` function and a branch in `export_report` (`exporter.py`).
-- **New extractor** (e.g. JSON-LD, emails): add a function in `parser.py`, a field on `PageData`, and surface it in `tui.py` / `exporter.py`.
+- **New extractor:** add a module under `osint_scraper/extractors/` as described above.
 - **JavaScript-rendered pages:** implement a `Fetcher` with the same `fetch()` signature backed by a headless browser.

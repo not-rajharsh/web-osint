@@ -24,7 +24,7 @@ from rich.text import Text
 from rich.theme import Theme
 from rich.tree import Tree
 
-from .config import APP_NAME, __version__
+from .config import APP_NAME, FINDING_CATEGORIES, FINDING_LABELS, __version__
 from .models import ScrapeReport
 
 # ------------------------------------------------------------------- tokens
@@ -50,6 +50,15 @@ LINK_TYPE_STYLE = {
     "tel": "accent",
 }
 HEADING_LEVEL_STYLE = {1: "brand", 2: "label", 3: "label"}
+FINDING_CATEGORY_STYLE = {
+    "emails": "accent",
+    "phones": "accent",
+    "social": "link",
+    "crypto": "warning",
+    "secrets": "danger",
+    "structured_data": "brand",
+    "technologies": "success",
+}
 
 _SYMBOLS_UNICODE = {"ok": "✔", "warn": "▲", "error": "✖", "info": "●"}
 _SYMBOLS_ASCII = {"ok": "OK", "warn": "!", "error": "x", "info": "*"}
@@ -130,6 +139,7 @@ class UI:
             return
         self._summary(report)
         self._metadata(report)
+        self._findings(report, limit)
         self._headings(report, limit)
         self._links(report, limit)
         self._images(report, limit)
@@ -193,6 +203,7 @@ class UI:
             ),
         )
         table.add_row("Images", Text(str(len(page.images))))
+        table.add_row("Findings", Text(str(len(report.findings))))
         self.console.print(table)
 
     def _metadata(self, report: ScrapeReport) -> None:
@@ -205,6 +216,31 @@ class UI:
         for key, value in rows:
             table.add_row(Text(key), Text(value, overflow="fold"))
         self.console.print(table)
+
+    def _findings(self, report: ScrapeReport, limit: int) -> None:
+        findings = report.findings
+        if not findings:
+            self.notice("warn", "No entities or technologies detected.")
+            return
+        order = {category: index for index, category in enumerate(FINDING_CATEGORIES)}
+        ordered = sorted(findings, key=lambda item: order.get(item.category, len(order)))
+        table = self._table(f"Entities & Findings ({len(findings)})", "Type", "Value", "Conf.", "Source")
+        table.columns[0].style = "label"
+        table.columns[2].justify = "right"
+        for finding in ordered[:limit]:
+            table.add_row(
+                Text(
+                    FINDING_LABELS.get(finding.category, finding.category),
+                    style=FINDING_CATEGORY_STYLE.get(finding.category, ""),
+                ),
+                Text(finding.value, overflow="ellipsis", no_wrap=True),
+                Text(f"{finding.confidence:.0%}", style="muted"),
+                Text(finding.source, overflow="ellipsis", no_wrap=True, style="muted"),
+            )
+        table.columns[1].max_width = 48
+        table.columns[3].max_width = 48
+        self.console.print(table)
+        self._footer(min(limit, len(findings)), len(findings))
 
     def _headings(self, report: ScrapeReport, limit: int) -> None:
         headings = report.page.headings
