@@ -77,14 +77,16 @@ Existing files are never overwritten (`-1`, `-2`, ... suffix is added).
 ## Project layout
 
 ```
-scraper.py                 CLI entry point and orchestration
 osint_scraper/
+  scraper.py               CLI entry point and orchestration
   config.py                defaults, user-agent pool, limits
   models.py                dataclasses shared between layers
   fetcher.py               Requests session, retries, UA rotation, robots.txt
   parser.py                BeautifulSoup extraction (pure function)
   exporter.py              JSON and Markdown writers
   tui.py                   Rich design tokens and components
+scraper.py                 backwards-compatible wrapper for the CLI
+tests/                     pytest unit tests (network mocked)
 docs/ADR-001-modular-pipeline.md
 ```
 
