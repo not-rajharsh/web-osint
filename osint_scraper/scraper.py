@@ -19,7 +19,7 @@ import sys
 from datetime import datetime, timezone
 from urllib.parse import urldefrag, urlsplit
 
-from osint_scraper.config import (
+from .config import (
     APP_NAME,
     DEFAULT_OUTPUT_DIR,
     DEFAULT_RETRIES,
@@ -27,11 +27,11 @@ from osint_scraper.config import (
     DEFAULT_TIMEOUT,
     __version__,
 )
-from osint_scraper.exporter import FORMATS, ExportError, export_report
-from osint_scraper.fetcher import FetchError, Fetcher
-from osint_scraper.models import ScrapeReport
-from osint_scraper.parser import ParseError, parse_page
-from osint_scraper.tui import UI
+from .exporter import FORMATS, ExportError, export_report
+from .fetcher import FetchError, Fetcher
+from .models import ScrapeReport
+from .parser import ParseError, parse_page
+from .tui import UI
 
 EXIT_OK = 0
 EXIT_FETCH = 1
@@ -82,7 +82,7 @@ def _positive_int(value: str) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="scraper.py",
+        prog="osint-scraper",
         description="Extract headings, links, metadata, images and text from a web page "
         "and save the results as JSON and/or Markdown.",
         epilog="Only scrape sites you are permitted to access, and respect their terms of use.",
