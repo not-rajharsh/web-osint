@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 APP_NAME = "OSINT Scraper"
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 # --- Network defaults -------------------------------------------------------
 DEFAULT_TIMEOUT = 15.0            # seconds, applied to connect and read
@@ -20,6 +20,18 @@ RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 HTML_CONTENT_TYPES = frozenset(
     {"text/html", "application/xhtml+xml", "application/xml", "text/xml"}
 )
+
+# --- Crawl defaults ---------------------------------------------------------
+DEFAULT_CRAWL_DEPTH = 2
+DEFAULT_MAX_PAGES = 25
+DEFAULT_CRAWL_DELAY = 1.0         # minimum seconds between requests to one host
+DEFAULT_CONCURRENCY = 5           # parallel page fetches
+DEFAULT_SCOPE = "domain"          # host | domain
+CRAWL_SCOPES = ("host", "domain")
+MAX_SITEMAP_DOCUMENTS = 5
+MAX_SITEMAP_BYTES = 5 * 1024 * 1024
+MAX_SITEMAP_URLS = 1000
+XML_CONTENT_TYPES = frozenset({"application/xml", "text/xml", "application/xhtml+xml"})
 
 # --- Output defaults --------------------------------------------------------
 DEFAULT_OUTPUT_DIR = "exports"
@@ -81,7 +93,7 @@ USER_AGENTS: tuple[str, ...] = (
     "(KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1",
 )
 
-# "br" is deliberately omitted: requests cannot decode Brotli without an extra
+# "br" is deliberately omitted: httpx cannot decode Brotli without an extra
 # dependency, and advertising it would yield undecodable bodies.
 BASE_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",

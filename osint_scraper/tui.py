@@ -138,6 +138,7 @@ class UI:
         if self.quiet:
             return
         self._summary(report)
+        self._crawl(report, limit)
         self._metadata(report)
         self._findings(report, limit)
         self._headings(report, limit)
@@ -204,7 +205,45 @@ class UI:
         )
         table.add_row("Images", Text(str(len(page.images))))
         table.add_row("Findings", Text(str(len(report.findings))))
+        if report.crawl:
+            table.add_row("Pages crawled", Text(str(len(report.pages))))
+            table.add_row("Crawl scope", Text(f"{report.crawl.scope}, depth {report.crawl.depth}"))
+            if report.crawl.failures:
+                table.add_row("Crawl failures", Text(str(len(report.crawl.failures)), style="warning"))
         self.console.print(table)
+
+    def _crawl(self, report: ScrapeReport, limit: int) -> None:
+        if not report.crawl or not report.pages:
+            return
+        table = self._table(
+            f"Crawled Pages ({len(report.pages)})",
+            "URL",
+            "Depth",
+            "Status",
+            "Title",
+            "Findings",
+        )
+        table.columns[0].style = "link"
+        table.columns[1].justify = "right"
+        table.columns[4].justify = "right"
+        for page_result in report.pages[:limit]:
+            title = str(page_result.page.metadata.get("title") or "(none)")
+            table.add_row(
+                Text(page_result.fetch.final_url, overflow="ellipsis", no_wrap=True),
+                Text(str(page_result.depth), style="muted"),
+                Text(str(page_result.fetch.status_code)),
+                Text(title, overflow="ellipsis", no_wrap=True),
+                Text(str(len(page_result.findings))),
+            )
+        table.columns[0].max_width = 52
+        table.columns[3].max_width = 32
+        self.console.print(table)
+        self._footer(min(limit, len(report.pages)), len(report.pages))
+        if report.crawl.failures:
+            self.notice(
+                "warn",
+                f"{len(report.crawl.failures)} page(s) could not be crawled; see the export for details.",
+            )
 
     def _metadata(self, report: ScrapeReport) -> None:
         rows = report.page.flat_metadata()
@@ -224,10 +263,22 @@ class UI:
             return
         order = {category: index for index, category in enumerate(FINDING_CATEGORIES)}
         ordered = sorted(findings, key=lambda item: order.get(item.category, len(order)))
-        table = self._table(f"Entities & Findings ({len(findings)})", "Type", "Value", "Conf.", "Source")
+        table = self._table(
+            f"Entities & Findings ({len(findings)})",
+            "Type",
+            "Value",
+            "Conf.",
+            "Pages",
+            "Source",
+        )
         table.columns[0].style = "label"
         table.columns[2].justify = "right"
+        table.columns[3].justify = "right"
         for finding in ordered[:limit]:
+            if len(finding.pages) <= 1:
+                pages = finding.pages[0] if finding.pages else "-"
+            else:
+                pages = f"{len(finding.pages)} pages"
             table.add_row(
                 Text(
                     FINDING_LABELS.get(finding.category, finding.category),
@@ -235,10 +286,12 @@ class UI:
                 ),
                 Text(finding.value, overflow="ellipsis", no_wrap=True),
                 Text(f"{finding.confidence:.0%}", style="muted"),
+                Text(pages, overflow="ellipsis", no_wrap=True, style="muted"),
                 Text(finding.source, overflow="ellipsis", no_wrap=True, style="muted"),
             )
         table.columns[1].max_width = 48
-        table.columns[3].max_width = 48
+        table.columns[3].max_width = 32
+        table.columns[4].max_width = 40
         self.console.print(table)
         self._footer(min(limit, len(findings)), len(findings))
 

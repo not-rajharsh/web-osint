@@ -2,35 +2,19 @@
 
 from __future__ import annotations
 
-import time
+import asyncio
 from typing import Callable
 from urllib.parse import urljoin, urlsplit
 
 from bs4 import BeautifulSoup
-from tldextract import TLDExtract
 
 from .config import DEFAULT_SCRIPT_LIMIT, MAX_SCRIPT_BYTES, SCRIPT_DELAY
 from .fetcher import Fetcher, FetchError
 from .models import ScriptSource
-
-_TLD_EXTRACT = TLDExtract(suffix_list_urls=())
-
-
-def _host(url: str) -> str:
-    name = (urlsplit(url).hostname or "").lower()
-    return name[4:] if name.startswith("www.") else name
+from .urls import same_site
 
 
-def _registrable_domain(hostname: str) -> str:
-    extracted = _TLD_EXTRACT(hostname)
-    return ".".join(part for part in (extracted.domain, extracted.suffix) if part) or hostname
-
-
-def _same_site(first: str, second: str) -> bool:
-    return _registrable_domain(_host(first)) == _registrable_domain(_host(second))
-
-
-def collect_scripts(
+async def collect_scripts(
     html: str,
     base_url: str,
     *,
@@ -63,24 +47,24 @@ def collect_scripts(
             continue
 
         url = urljoin(base_url, src.strip())
-        if urlsplit(url).scheme not in ("http", "https") or not _same_site(base_url, url):
+        if urlsplit(url).scheme not in ("http", "https") or not same_site(base_url, url):
             continue
 
         if respect_robots:
             parts = urlsplit(url)
             origin = f"{parts.scheme}://{parts.netloc}"
             if origin not in robots_cache:
-                robots_cache[origin] = fetcher.is_allowed(url)
+                robots_cache[origin] = await fetcher.is_allowed(url)
             if not robots_cache[origin]:
                 continue
 
         linked_count += 1
         if linked_count > 1:
-            time.sleep(delay)
+            await asyncio.sleep(delay)
         if on_event:
             on_event(f"Scanning script {linked_count}/{limit}: {url}")
         try:
-            content = fetcher.fetch_text(url, max_bytes=MAX_SCRIPT_BYTES)
+            content = await fetcher.fetch_text(url, max_bytes=MAX_SCRIPT_BYTES)
         except FetchError:
             continue
         sources.append(ScriptSource(label=url, content=content, url=url))

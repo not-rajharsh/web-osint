@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 
 from ..models import Finding
-from ._util import has_valid_tld, source_line
+from ..urls import has_valid_tld
+from ._util import source_line
 from .base import ExtractionContext, Extractor, register
 
 _EMAIL_RE = re.compile(

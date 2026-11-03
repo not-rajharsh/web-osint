@@ -89,8 +89,10 @@ def render_markdown(report: ScrapeReport) -> str:
         f"{counts.get('mailto', 0) + counts.get('tel', 0)} contact) |",
         f"| Images | {len(page.images)} |",
         f"| Findings | {len(report.findings)} |",
-        "",
     ]
+    if report.crawl:
+        lines.append(f"| Pages crawled | {len(report.pages)} |")
+    lines.append("")
 
     metadata_rows = page.flat_metadata()
     lines += ["## Metadata", ""]
@@ -100,6 +102,46 @@ def render_markdown(report: ScrapeReport) -> str:
     else:
         lines.append("_No metadata found._")
     lines.append("")
+
+    if report.crawl:
+        lines += [
+            f"## Crawl ({len(report.pages)} pages)",
+            "",
+            f"- Depth: {report.crawl.depth}",
+            f"- Scope: {report.crawl.scope}",
+            f"- Page limit: {report.crawl.max_pages}",
+            f"- Sitemaps read: {len(report.crawl.sitemaps)}",
+            "",
+        ]
+        if report.pages:
+            lines += [
+                "| URL | Depth | Status | Title | Findings |",
+                "|---|---|---|---|---|",
+            ]
+            for page_result in report.pages:
+                title = page_result.page.metadata.get("title") or ""
+                lines.append(
+                    f"| {_md_cell(page_result.fetch.final_url)} "
+                    f"| {page_result.depth} "
+                    f"| {page_result.fetch.status_code} "
+                    f"| {_md_cell(title)} "
+                    f"| {len(page_result.findings)} |"
+                )
+            lines.append("")
+        if report.crawl.sitemaps:
+            lines += ["### Sitemaps", ""]
+            lines += [
+                f"- {_md_inline(sitemap)}" for sitemap in report.crawl.sitemaps
+            ]
+            lines.append("")
+        if report.crawl.failures:
+            lines += ["### Crawl failures", ""]
+            lines += [
+                f"- {_md_inline(failure.url)} - "
+                f"{_md_inline(failure.kind)}: {_md_inline(failure.message)}"
+                for failure in report.crawl.failures
+            ]
+            lines.append("")
 
     lines += [f"## Entities & Findings ({len(report.findings)})", ""]
     if report.findings:
@@ -114,10 +156,15 @@ def render_markdown(report: ScrapeReport) -> str:
             label = FINDING_LABELS.get(category, category.replace("_", " ").title())
             lines += [f"### {label} ({len(findings)})", ""]
             for finding in findings[:MD_MAX_FINDINGS_PER_CATEGORY]:
+                pages = ""
+                if finding.pages:
+                    pages = " - pages: " + ", ".join(
+                        _md_inline(page_url) for page_url in finding.pages
+                    )
                 lines.append(
                     f"- **{_md_inline(finding.value)}** "
                     f"(confidence {finding.confidence:.0%}) - "
-                    f"source: {_md_inline(finding.source)}"
+                    f"source: {_md_inline(finding.source)}{pages}"
                 )
             if len(findings) > MD_MAX_FINDINGS_PER_CATEGORY:
                 lines.append(

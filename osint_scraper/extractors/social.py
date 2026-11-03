@@ -5,7 +5,8 @@ from __future__ import annotations
 from urllib.parse import urlsplit
 
 from ..models import Finding
-from ._util import host, source_line
+from ..urls import host
+from ._util import source_line
 from .base import ExtractionContext, Extractor, register
 
 _TWITTER_RESERVED = {

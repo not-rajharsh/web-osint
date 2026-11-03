@@ -1,12 +1,14 @@
-"""Fetch layer: HTTP retrieval with user-agent rotation and clean errors.
+"""Async fetch layer built on httpx.
 
-This module knows nothing about HTML structure, files or the terminal. Its only
-job is to turn a URL into a :class:`FetchResult` or raise a :class:`FetchError`
-that carries a machine-readable ``kind`` and a human-readable message.
+The public interface is unchanged: :meth:`Fetcher.fetch`,
+:meth:`Fetcher.fetch_text` and :meth:`Fetcher.is_allowed` still return the same
+results and raise the same :class:`FetchError`. Internally requests are async,
+share one connection pool, and pass through a per-host rate limiter.
 """
 
 from __future__ import annotations
 
+import asyncio
 import random
 import re
 import time
@@ -14,7 +16,7 @@ from typing import Callable
 from urllib.parse import urlsplit
 from urllib.robotparser import RobotFileParser
 
-import requests
+import httpx
 from bs4.dammit import UnicodeDammit
 
 from .config import (
@@ -31,6 +33,7 @@ from .config import (
     USER_AGENTS,
 )
 from .models import FetchResult
+from .urls import origin
 
 _CHARSET_RE = re.compile(r"charset=([\w\-]+)", re.IGNORECASE)
 
@@ -58,8 +61,30 @@ class FetchError(Exception):
         self.retry_after = retry_after
 
 
+class HostRateLimiter:
+    """Enforce a minimum delay between request starts for each host."""
+
+    def __init__(self, delay: float) -> None:
+        self.delay = max(delay, 0.0)
+        self._next: dict[str, float] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    async def wait(self, url: str) -> None:
+        if self.delay <= 0:
+            return
+        host = urlsplit(url).netloc.lower()
+        lock = self._locks.setdefault(host, asyncio.Lock())
+        async with lock:
+            loop = asyncio.get_running_loop()
+            now = loop.time()
+            ready_at = self._next.get(host, 0.0)
+            if ready_at > now:
+                await asyncio.sleep(ready_at - now)
+            self._next[host] = loop.time() + self.delay
+
+
 class Fetcher:
-    """HTTP client wrapper with retry, backoff and user-agent rotation."""
+    """Async HTTP client with retry, backoff, UA rotation and robots caching."""
 
     def __init__(
         self,
@@ -69,7 +94,9 @@ class Fetcher:
         backoff: float = DEFAULT_BACKOFF,
         max_bytes: int = DEFAULT_MAX_BYTES,
         user_agent: str | None = None,
+        delay: float = 0.0,
         on_event: Callable[[str], None] | None = None,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
         self.timeout = timeout
         self.retries = retries
@@ -77,25 +104,89 @@ class Fetcher:
         self.max_bytes = max_bytes
         self.fixed_user_agent = user_agent
         self.on_event = on_event
-        self.session = requests.Session()
-        self.session.max_redirects = MAX_REDIRECTS
+        self.client = client or httpx.AsyncClient(
+            follow_redirects=True,
+            max_redirects=MAX_REDIRECTS,
+        )
+        self._limiter = HostRateLimiter(delay)
+        self._robots: dict[str, RobotFileParser | None] = {}
+        self._robots_tasks: dict[str, asyncio.Task[RobotFileParser | None]] = {}
+
+    async def __aenter__(self) -> "Fetcher":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        await self.client.aclose()
 
     # ------------------------------------------------------------------ public
-    def fetch(self, url: str) -> FetchResult:
+    async def fetch(self, url: str) -> FetchResult:
         """Fetch an HTML page, retrying transient failures with exponential backoff."""
-        return self._fetch(url, HTML_CONTENT_TYPES, is_html=True, max_bytes=self.max_bytes)
+        return await self._fetch(
+            url, HTML_CONTENT_TYPES, is_html=True, max_bytes=self.max_bytes
+        )
 
-    def fetch_text(self, url: str, *, max_bytes: int | None = None) -> str:
-        """Fetch a JavaScript/text resource and return its decoded body."""
-        result = self._fetch(
+    async def fetch_text(
+        self,
+        url: str,
+        *,
+        max_bytes: int | None = None,
+        content_types: frozenset[str] | None = None,
+    ) -> str:
+        """Fetch a JavaScript/text/XML resource and return its decoded body."""
+        result = await self._fetch(
             url,
-            SCRIPT_CONTENT_TYPES,
+            content_types or SCRIPT_CONTENT_TYPES,
             is_html=False,
             max_bytes=max_bytes or self.max_bytes,
         )
         return result.html
 
-    def _fetch(
+    async def is_allowed(self, url: str) -> bool:
+        """Check robots.txt for ``url`` using the wildcard (``*``) rules.
+
+        Robots rules are cached per origin. A 401/403 on robots.txt means
+        "disallow all"; other 4xx, 5xx or network failures mean "no rules were
+        published", so crawling is permitted.
+        """
+        key = origin(url)
+        if key not in self._robots:
+            task = self._robots_tasks.get(key)
+            if task is None:
+                task = asyncio.create_task(self._load_robots(key))
+                self._robots_tasks[key] = task
+            try:
+                self._robots[key] = await task
+            finally:
+                self._robots_tasks.pop(key, None)
+        rules = self._robots[key]
+        return True if rules is None else rules.can_fetch("*", url)
+
+    async def _load_robots(self, origin_url: str) -> RobotFileParser | None:
+        robots_url = f"{origin_url}/robots.txt"
+        await self._limiter.wait(robots_url)
+        try:
+            response = await self.client.get(
+                robots_url,
+                headers=self._headers(),
+                timeout=self.timeout,
+            )
+        except httpx.HTTPError:
+            return None
+        if response.status_code in (401, 403):
+            parser = RobotFileParser()
+            parser.parse(["User-agent: *", "Disallow: /"])
+            return parser
+        if response.status_code != 200:
+            return None
+        parser = RobotFileParser()
+        parser.parse(response.text.splitlines())
+        return parser
+
+    # ----------------------------------------------------------------- private
+    async def _fetch(
         self,
         url: str,
         content_types: frozenset[str],
@@ -106,7 +197,7 @@ class Fetcher:
         total_attempts = self.retries + 1
         for attempt in range(1, total_attempts + 1):
             try:
-                return self._attempt(
+                return await self._attempt(
                     url,
                     attempt,
                     content_types=content_types,
@@ -119,36 +210,10 @@ class Fetcher:
                 wait = self.backoff * (2 ** (attempt - 1)) + random.uniform(0, 0.25)
                 if exc.retry_after:
                     wait = max(wait, min(exc.retry_after, MAX_RETRY_AFTER))
-                self._emit(
-                    f"{exc} - retry {attempt}/{self.retries} in {wait:.1f}s"
-                )
-                time.sleep(wait)
+                self._emit(f"{exc} - retry {attempt}/{self.retries} in {wait:.1f}s")
+                await asyncio.sleep(wait)
         raise FetchError("Retry loop exited unexpectedly.")  # pragma: no cover
 
-    def is_allowed(self, url: str) -> bool:
-        """Check robots.txt for ``url`` using the wildcard (``*``) rules.
-
-        Follows the common interpretation of RFC 9309: a 401/403 on robots.txt
-        means "disallow all"; other 4xx, 5xx or network failures mean "no rules
-        were published", so crawling is permitted.
-        """
-        parts = urlsplit(url)
-        robots_url = f"{parts.scheme}://{parts.netloc}/robots.txt"
-        try:
-            response = self.session.get(
-                robots_url, headers=self._headers(), timeout=self.timeout
-            )
-        except requests.exceptions.RequestException:
-            return True
-        if response.status_code in (401, 403):
-            return False
-        if response.status_code != 200:
-            return True
-        parser = RobotFileParser()
-        parser.parse(response.text.splitlines())
-        return parser.can_fetch("*", url)
-
-    # ----------------------------------------------------------------- private
     def _emit(self, message: str) -> None:
         if self.on_event:
             self.on_event(message)
@@ -159,7 +224,7 @@ class Fetcher:
     def _headers(self, user_agent: str | None = None) -> dict[str, str]:
         return {**BASE_HEADERS, "User-Agent": user_agent or self._pick_user_agent()}
 
-    def _attempt(
+    async def _attempt(
         self,
         url: str,
         attempt: int,
@@ -170,54 +235,46 @@ class Fetcher:
     ) -> FetchResult:
         user_agent = self._pick_user_agent()
         started = time.perf_counter()
+        await self._limiter.wait(url)
         try:
-            response = self.session.get(
+            async with self.client.stream(
+                "GET",
                 url,
                 headers=self._headers(user_agent),
                 timeout=self.timeout,
-                stream=True,
-                allow_redirects=True,
-            )
-        except requests.exceptions.SSLError as exc:
-            if "wrong_version_number" in str(exc).lower():
-                message = "The server does not speak HTTPS on this port (try an http:// URL)"
-            else:
-                message = f"TLS/SSL error: {_short(exc)}"
-            raise FetchError(message, kind="ssl") from exc
-        except requests.exceptions.Timeout as exc:
+            ) as response:
+                self._check_status(response)
+                content_type = (
+                    response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+                )
+                if content_type and content_type not in content_types:
+                    expected = "HTML" if is_html else "JavaScript or text"
+                    raise FetchError(
+                        f"Unsupported content type '{content_type}' (expected {expected})",
+                        kind="content_type",
+                    )
+                body = await self._read_body(response, max_bytes)
+                final_url = str(response.url)
+                status_code = response.status_code
+                reason = response.reason_phrase or ""
+                raw_content_type = response.headers.get("Content-Type", "")
+                response_headers = dict(response.headers)
+        except httpx.TooManyRedirects as exc:
+            raise FetchError(
+                f"Gave up after {MAX_REDIRECTS} redirects (possible redirect loop)",
+                kind="redirects",
+            ) from exc
+        except httpx.TimeoutException as exc:
             raise FetchError(
                 f"Timed out after {self.timeout:g}s waiting for a response",
                 kind="timeout",
                 retryable=True,
             ) from exc
-        except requests.exceptions.TooManyRedirects as exc:
-            raise FetchError(
-                f"Gave up after {MAX_REDIRECTS} redirects (possible redirect loop)",
-                kind="redirects",
-            ) from exc
-        except requests.exceptions.ConnectionError as exc:
+        except httpx.ConnectError as exc:
             kind, message = _describe_connection_error(exc)
             raise FetchError(message, kind=kind, retryable=kind != "dns") from exc
-        except requests.exceptions.RequestException as exc:
+        except (httpx.InvalidURL, httpx.HTTPError) as exc:
             raise FetchError(f"Request failed: {_short(exc)}", kind="request") from exc
-
-        with response:
-            self._check_status(response)
-            content_type = (
-                response.headers.get("Content-Type", "").split(";")[0].strip().lower()
-            )
-            if content_type and content_type not in content_types:
-                expected = "HTML" if is_html else "JavaScript or text"
-                raise FetchError(
-                    f"Unsupported content type '{content_type}' (expected {expected})",
-                    kind="content_type",
-                )
-            body = self._read_body(response, max_bytes)
-            final_url = response.url
-            status_code = response.status_code
-            reason = response.reason or ""
-            raw_content_type = response.headers.get("Content-Type", "")
-            response_headers = dict(response.headers)
 
         if not body.strip():
             raise FetchError("The server returned an empty response body", kind="empty")
@@ -238,7 +295,7 @@ class Fetcher:
             headers=response_headers,
         )
 
-    def _check_status(self, response: requests.Response) -> None:
+    def _check_status(self, response: httpx.Response) -> None:
         code = response.status_code
         if code < 400:
             return
@@ -247,14 +304,14 @@ class Fetcher:
         if header.strip().isdigit():
             retry_after = float(header.strip())
         raise FetchError(
-            f"HTTP {code} {response.reason or ''}".strip(),
+            f"HTTP {code} {response.reason_phrase or ''}".strip(),
             kind="http",
             status_code=code,
             retryable=code in RETRYABLE_STATUS,
             retry_after=retry_after,
         )
 
-    def _read_body(self, response: requests.Response, max_bytes: int) -> bytes:
+    async def _read_body(self, response: httpx.Response, max_bytes: int) -> bytes:
         declared = response.headers.get("Content-Length", "").strip()
         if declared.isdigit() and int(declared) > max_bytes:
             raise FetchError(
@@ -264,7 +321,7 @@ class Fetcher:
         chunks: list[bytes] = []
         total = 0
         try:
-            for chunk in response.iter_content(chunk_size=64 * 1024):
+            async for chunk in response.aiter_bytes():
                 if not chunk:
                     continue
                 total += len(chunk)
@@ -274,13 +331,13 @@ class Fetcher:
                         kind="too_large",
                     )
                 chunks.append(chunk)
-        except requests.exceptions.Timeout as exc:
+        except httpx.TimeoutException as exc:
             raise FetchError(
                 f"Timed out after {self.timeout:g}s while reading the body",
                 kind="timeout",
                 retryable=True,
             ) from exc
-        except requests.exceptions.RequestException as exc:
+        except httpx.HTTPError as exc:
             raise FetchError(
                 f"Connection dropped while reading the body: {_short(exc)}",
                 kind="connection",
@@ -296,14 +353,19 @@ def _short(exc: BaseException, limit: int = 160) -> str:
 
 
 def _describe_connection_error(exc: BaseException) -> tuple[str, str]:
-    """Translate verbose urllib3/requests connection errors into one line."""
+    """Translate verbose httpx connection errors into one line."""
     text = str(exc).lower()
+    if "ssl" in text or "certificate" in text or "tls" in text:
+        if "wrong_version_number" in text:
+            return "ssl", "The server does not speak HTTPS on this port (try an http:// URL)"
+        return "ssl", f"TLS/SSL error: {_short(exc)}"
     dns_markers = (
         "name or service not known",
         "nameresolutionerror",
         "getaddrinfo failed",
         "nodename nor servname",
         "temporary failure in name resolution",
+        "no address associated with hostname",
     )
     if any(marker in text for marker in dns_markers):
         return "dns", "DNS lookup failed - the host name could not be resolved"

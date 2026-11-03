@@ -1,7 +1,8 @@
 # OSINT Scraper
 
-A local, CLI-driven utility that extracts structured data from a web page and
-saves it as JSON and Markdown, with a color-coded terminal UI.
+A local, CLI-driven utility that extracts structured data from a web page or a
+scoped, depth-limited crawl and saves it as JSON and Markdown, with a color-coded
+terminal UI.
 
 Extracts: **metadata** (title, description, keywords, canonical, language,
 Open Graph, Twitter cards, favicon), **headings** (H1-H6 hierarchy), **links**
@@ -15,7 +16,8 @@ inline JavaScript (and optionally linked scripts), JSON-LD/microdata, and
 technology fingerprints. See [Entity extraction](#entity-extraction).
 
 > Only scrape sites you are permitted to access and respect their terms of use.
-> Use `--respect-robots` to honour robots.txt.
+> Crawls always honour robots.txt; use `--respect-robots` to enforce it for a
+> single-page scrape too. Linked-script requests are always robots-checked.
 >
 > Detection is best-effort, not proof. Review findings before acting on them.
 > Secret values are always masked in exports and terminal output.
@@ -38,6 +40,8 @@ osint-scraper --url https://example.com --format json
 osint-scraper -u example.org -f md --respect-robots --limit 25
 osint-scraper -u https://example.com -q        # prints only the file paths
 osint-scraper -u https://example.com --scan-scripts  # also scan same-site JS
+osint-scraper -u https://example.com --crawl   # crawl same-site pages
+osint-scraper -u example.com --crawl --depth 3 --max-pages 100 --scope host
 
 python scraper.py --url https://example.com    # works from a checkout too
 ```
@@ -50,8 +54,14 @@ python scraper.py --url https://example.com    # works from a checkout too
 | `-t, --timeout` | `15` | Network timeout in seconds. |
 | `-r, --retries` | `2` | Retries for timeouts, connection drops, and HTTP 429/5xx. |
 | `-a, --user-agent` | rotate | Use a fixed User-Agent instead of the built-in pool. |
-| `--respect-robots` | off | Refuse pages disallowed by robots.txt. |
+| `--respect-robots` | off | Refuse a single page disallowed by robots.txt (crawls always check). |
 | `--scan-scripts` | off | Fetch same-site linked JavaScript for secret scanning (robots.txt is always checked for these requests). |
+| `--crawl` | off | Crawl linked pages starting from `--url` and aggregate findings. |
+| `--depth` | `2` | Maximum link depth below the seed page. |
+| `--max-pages` | `25` | Maximum successful and failed page fetches per crawl. |
+| `--scope` | `domain` | Stay within the seed `host` or registrable `domain` (subdomains included). |
+| `--delay` | `1.0` | Minimum seconds between requests to the same host during a crawl. |
+| `--concurrency` | `5` | Maximum in-flight page requests per crawl. |
 | `-l, --limit` | `15` | Rows per terminal table (exports always contain everything\*). |
 | `--no-color` | off | Disable colour (`NO_COLOR` is also honoured). |
 | `-q, --quiet` | off | No spinner or tables; print only exported paths. |
@@ -77,7 +87,7 @@ Existing files are never overwritten (`-1`, `-2`, ... suffix is added).
 
 ```jsonc
 {
-  "tool": "OSINT Scraper", "version": "1.0.0", "scraped_at": "2026-10-17T03:25:15+00:00",
+  "tool": "OSINT Scraper", "version": "1.1.0", "scraped_at": "2026-10-17T03:25:15+00:00",
   "fetch": { "requested_url": "...", "final_url": "...", "status_code": 200,
              "elapsed_ms": 120, "content_type": "text/html", "encoding": "utf-8",
              "size_bytes": 1187, "user_agent": "...", "attempts": 1, "redirected": false },
@@ -90,7 +100,16 @@ Existing files are never overwritten (`-1`, `-2`, ... suffix is added).
     "emails": [{ "value": "alice@example.com", "confidence": 0.95, "source": "html:line 12" }],
     "secrets": [{ "value": "AKIA…CDEF", "confidence": 0.95,
                   "source": "https://example.com/app.js:line 3",
-                  "data": { "pattern": "aws_access_key" } }]
+                  "data": { "pattern": "aws_access_key" },
+                  "pages": ["https://example.com/"] }]
+  },
+  "pages": [
+    { "url": "https://example.com/", "depth": 0, "fetch": {}, "page": {}, "findings": [] }
+  ],
+  "crawl": {
+    "depth": 2, "max_pages": 25, "scope": "domain",
+    "sitemaps": ["https://example.com/sitemap.xml"],
+    "failures": [{ "url": "...", "depth": 1, "kind": "robots", "message": "..." }]
   }
 }
 ```
@@ -98,7 +117,23 @@ Existing files are never overwritten (`-1`, `-2`, ... suffix is added).
 Findings are grouped in a fixed category order (`emails`, `phones`, `social`,
 `crypto`, `secrets`, `structured_data`, `technologies`). Each finding includes a
 0–1 confidence and a source such as `html:line 12`, `text:line 3`, or a script
-URL plus line number.
+URL plus line number. Crawl findings are merged by category, value, and data;
+`pages` lists every page where the value appeared, and confidence is the maximum
+seen. The `pages` and `crawl` keys are present only for crawl runs.
+
+## Crawling
+
+`--crawl` processes the seed page, then follows same-scope HTML links breadth-first
+up to `--depth`. URLs are canonicalised and deduplicated (fragments removed,
+default ports normalised, dot segments collapsed) before queueing. The crawl also
+reads `origin/sitemap.xml`, follows sitemap indexes, and queues in-scope URLs at
+depth 1, subject to the same depth/page/scope limits and robots checks.
+
+Crawls always check robots.txt, apply a per-host delay, cap concurrency, and stop
+after `--max-pages` attempts. Cross-scope redirects and disallowed/failed pages are
+recorded under `crawl.failures` rather than aborting the whole run. If the seed
+itself fails, the command exits with fetch error code 1. Sitemap loading is capped
+at 5 documents, 5 MiB each, and 1,000 URLs.
 
 ## Entity extraction
 
@@ -126,10 +161,13 @@ discovered automatically.
 
 ```
 osint_scraper/
-  scraper.py               CLI entry point and orchestration
-  config.py                defaults, user-agent pool, limits
+  scraper.py               CLI entry point and async orchestration
+  config.py                defaults, user-agent pool, crawl limits
   models.py                dataclasses shared between layers
-  fetcher.py               Requests session, retries, UA rotation, robots.txt
+  urls.py                  URL canonicalisation and scope helpers
+  fetcher.py               Async httpx client, retries, rate limiting, robots.txt
+  pipeline.py              Single-page fetch/parse/extract stage
+  crawler.py               Scoped queue, sitemap discovery, finding aggregation
   parser.py                BeautifulSoup extraction (pure function)
   scripts.py               Inline and linked JavaScript collection
   extractors/              Auto-discovered extraction plugins
@@ -150,6 +188,7 @@ Design rationale: [docs/ADR-001-modular-pipeline.md](docs/ADR-001-modular-pipeli
 
 - **User-agent rotation:** a different browser UA is chosen for every attempt (or pin one with `-a`).
 - **Retries:** exponential backoff with jitter for timeouts, dropped connections, and HTTP 429/500/502/503/504; honours `Retry-After` (capped at 30 s). Non-transient errors (403, 404, DNS, TLS) fail immediately.
+- **Concurrency:** `httpx.AsyncClient` fetches pages concurrently, while a per-host lock enforces `--delay` between request starts. Crawl robots checks and sitemap reads share the same limiter.
 - **Safety limits:** non-HTML content types are rejected before download; bodies over 10 MiB are refused; redirect loops stop after 10 hops.
 - **Encoding:** decoded using the header charset, then `<meta>` charset, then sniffing.
 
@@ -192,4 +231,4 @@ Design rationale: [docs/ADR-001-modular-pipeline.md](docs/ADR-001-modular-pipeli
 
 - **New export format:** add a `render_*` function and a branch in `export_report` (`exporter.py`).
 - **New extractor:** add a module under `osint_scraper/extractors/` as described above.
-- **JavaScript-rendered pages:** implement a `Fetcher` with the same `fetch()` signature backed by a headless browser.
+- **JavaScript-rendered pages:** implement an async `Fetcher.fetch()` with the same signature backed by a headless browser.

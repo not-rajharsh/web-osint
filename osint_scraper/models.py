@@ -52,6 +52,7 @@ class Finding:
     confidence: float
     source: str
     data: dict[str, Any] | None = None
+    pages: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -61,6 +62,8 @@ class Finding:
         }
         if self.data:
             result["data"] = self.data
+        if self.pages:
+            result["pages"] = list(self.pages)
         return result
 
 
@@ -109,6 +112,67 @@ class PageData:
 
 
 @dataclass(frozen=True)
+class PageResult:
+    """One successfully processed page within a crawl."""
+
+    url: str
+    depth: int
+    fetch: FetchResult
+    page: PageData
+    findings: tuple[Finding, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "url": self.url,
+            "depth": self.depth,
+            "fetch": self.fetch.to_dict(),
+            "page": self.page.to_dict(),
+            "findings": [finding.to_dict() for finding in self.findings],
+        }
+
+
+@dataclass(frozen=True)
+class CrawlFailure:
+    """A URL that could not be crawled."""
+
+    url: str
+    depth: int
+    kind: str
+    message: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class CrawlInfo:
+    """Crawl settings and non-fatal failures."""
+
+    depth: int
+    max_pages: int
+    scope: str
+    sitemaps: tuple[str, ...] = ()
+    failures: tuple[CrawlFailure, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "depth": self.depth,
+            "max_pages": self.max_pages,
+            "scope": self.scope,
+            "sitemaps": list(self.sitemaps),
+            "failures": [failure.to_dict() for failure in self.failures],
+        }
+
+
+@dataclass(frozen=True)
+class CrawlResult:
+    """Pages crawled plus their crawl metadata."""
+
+    pages: tuple[PageResult, ...]
+    info: CrawlInfo
+
+
+@dataclass(frozen=True)
 class ScrapeReport:
     """The complete result of one run: provenance + fetch info + page data."""
 
@@ -118,6 +182,8 @@ class ScrapeReport:
     fetch: FetchResult
     page: PageData
     findings: tuple[Finding, ...] = ()
+    pages: tuple[PageResult, ...] = ()
+    crawl: CrawlInfo | None = None
 
     def grouped_findings(self) -> dict[str, list[Finding]]:
         grouped: dict[str, list[Finding]] = {}
@@ -135,7 +201,7 @@ class ScrapeReport:
         for category, findings in grouped.items():
             if category not in ordered:
                 ordered[category] = [finding.to_dict() for finding in findings]
-        return {
+        result: dict[str, Any] = {
             "tool": self.tool,
             "version": self.version,
             "scraped_at": self.scraped_at.isoformat(timespec="seconds"),
@@ -143,3 +209,8 @@ class ScrapeReport:
             "page": self.page.to_dict(),
             "findings": ordered,
         }
+        if self.pages:
+            result["pages"] = [page.to_dict() for page in self.pages]
+        if self.crawl:
+            result["crawl"] = self.crawl.to_dict()
+        return result
